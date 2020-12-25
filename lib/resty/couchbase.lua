@@ -8,6 +8,7 @@
 local bit = require "bit"
 local cjson = require 'cjson'
 local unpack = unpack
+local http = require("resty.http")
 
 local band = bit.band
 local lshift = bit.lshift
@@ -66,6 +67,29 @@ local function host2server(host_ports, need_random)
     return servers
 end
 
+local function http_post(host, port, url, data,token)
+    local httpc = http.new()
+    local body_data = ngx.encode_args(data)
+    local request = {
+        method = "POST",
+        path = url,
+        body = body_data,
+        headers = {
+            ["Content-Type"] = "application/x-www-form-urlencoded",
+            ["Content-Length"] = #body_data,
+            ["User-Agent"] = "lua-couchbase-client v0.1",
+            ["Authorization"] = 'Basic ' .. token,
+            ["Host"] = host .. ":" .. port,
+            ["Accept"] = "*/*"
+        }
+    }
+    local resp,err = httpc:request_uri("http://".. host .. ":" .. port,request)
+    if not resp or err then 
+        log_error("请求失败！")
+    end
+    return resp.body
+end
+
 local function http_request(host, port, url, token)
     local sock, err = tcp()
     if not sock then
@@ -117,20 +141,20 @@ local function http_request(host, port, url, token)
     return body
 end
 
-local function fetch_configs(servers, buck_name, password)
+local function fetch_configs(servers, bucket_name, username, password)
     local configs = {}
     local token
     if password == nil then
         password = ''
     end
-    token = base64(buck_name .. ':' .. password)
+    token = base64(username .. ':' .. password)
     local tries = min(max_tries, #servers)
     for try = 1, tries, 1 do
         local server = servers[try]
 
         log_info('try to fetch config ,from host=', server.host, ',port=', server.port, "token=", token)
 
-        local body, err = http_request(server.host, server.port, '/pools/default/buckets/' .. buck_name, token)
+        local body, err = http_request(server.host, server.port, '/pools/default/buckets/' .. bucket_name, token)
         if body then
             -- bug fixed with body is 'Requested resource not found.'.
             if string.find(body, '^{') then
@@ -139,39 +163,39 @@ local function fetch_configs(servers, buck_name, password)
                 break
             else
                 log_error(string.format(
-                    'fetch config is error,from host=%s, port=%s, buck_name=%s, token=%s, server response body=%s',
-                        server.host, server.port, buck_name, token, body))
+                    'fetch config is error,from host=%s, port=%s, username=%s, token=%s, server response body=%s',
+                        server.host, server.port, username, token, body))
             end
         else
-            log_error(string.format('fetch config is error,from host=%s, port=%s, buck_name=%s, token=%s, err=%s',
-                    server.host, server.port, buck_name, token, err))
+            log_error(string.format('fetch config is error,from host=%s, port=%s, username=%s, token=%s, err=%s',
+                    server.host, server.port, username, token, err))
         end
     end
 
     return configs
 end
 
-local function create_vbucket(host_ports, buck_name, password)
+local function create_vbucket(host_ports, bucket_name, username, password)
     local servers = host2server(host_ports, true)
     local vbucket = {
         host_ports = host_ports,
         servers = servers,
-        name = buck_name,
+        name = bucket_name,
+        username = username,
         password = password,
         type = 'membase',
         hash = 'CRC',
         mast = -1,
         nodes = {},
-        vmap = {},
+        vmap = {},  
     }
 
-    local configs = fetch_configs(servers, buck_name, password)
+    local configs = fetch_configs(servers, bucket_name, username, password)
     if #configs == 0 then
         return nil, 'fail to fetch configs.'
     end
-
     for _, config in ipairs(configs) do
-        if config.name == buck_name then
+        if config.name == bucket_name then
             if config['bucketType'] == 'membase' then
                 local bucket = config['vBucketServerMap']
                 if bucket then
@@ -198,7 +222,6 @@ local function create_vbucket(host_ports, buck_name, password)
             end
         end
     end
-
     return vbucket
 end
 
@@ -333,9 +356,11 @@ local function val_len(val)
 end
 
 local function extra_data(flags, expir)
+
     local bytes = {}
     set_byte4(bytes, flags)
     set_byte4(bytes, expir)
+
     return strchar(bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8])
 end
 
@@ -385,6 +410,13 @@ function packet_meta:create_response(...)
     setmetatable(resp, packet_mt)
     return resp
 end
+local function str_to_hex(data)
+    local hex_str = ""
+    for i=1, #data, 1 do
+        hex_str = hex_str .." ".. string.format("%02X", data:byte(i))
+    end
+    return hex_str
+end
 
 function packet_meta:send_packet(sock)
     local packet = self
@@ -401,6 +433,9 @@ function packet_meta:send_packet(sock)
     set_byte(header, packet.data_type)
     set_byte2(header, packet.vbucket_id)
 
+    if  packet.key == "PLAIN" and packet.value  then
+        packet.total_len = packet.total_len + 1
+    end
     set_byte4(header, packet.total_len)
     set_byte4(header, packet.opaque)
     set_byte8(header, packet.cas)
@@ -409,8 +444,10 @@ function packet_meta:send_packet(sock)
     bytes[#bytes + 1] = byte2str(header)
     bytes[#bytes + 1] = packet.extra
     bytes[#bytes + 1] = packet.key
+    if packet.key == "PLAIN" and packet.value then
+        bytes[#bytes + 1] = string.char(0)
+    end
     bytes[#bytes + 1] = packet.value
-
     return sock:send(table_concat(bytes))
 end
 
@@ -421,7 +458,6 @@ function packet_meta:read_packet(sock)
     if not data then
         return nil, "failed to receive packet header: " .. err
     end
-
     local packet = self
     packet.magic = strbyte(data, 1)
     packet.opcode = strbyte(data, 2)
@@ -479,7 +515,6 @@ function packet_meta:read_packet(sock)
             packet.value = num
         end
     end
-
     return packet
 end
 
@@ -492,6 +527,7 @@ local function prcess_sock_packet(sock, packet)
 end
 
 local opcodes = {
+    Hello = 0x1f,
     -- base opcode
     Get = 0x00,
     Set = 0x01,
@@ -566,38 +602,106 @@ local function sasl_list(sock)
     if not packet then
         return nil, "failed to test hmac: " .. err
     end
-
-    if string.find(packet.value, 'CRAM%-MD5') then
+    if string.find(packet.value, 'PLAIN') or string.find(packet.value, 'SCRAM_SHA') then
         return true
     end
     return nil, 'not support sasl'
 end
 
-local function sasl_auth(sock)
+local function sasl_auth(sock,client,auth_method)
+    local value,nonce = nil
+    auth_method = auth_method or "PLAIN"
+    if auth_method == "SCRAM-SHA1" then 
+        local user = string.gsub(string.gsub(client.username, '=', '=3D'), ',' , '=2C')
+        nonce = ngx.encode_base64(string.sub(tostring(math.random()), 3 , 14))
+        local first_bare = "n="  .. user .. ",r="  .. nonce
+        value = "n,," .. first_bare
+    end
+    if auth_method == "PLAIN" then
+        value = client.username .. string.char(0) .. client.password
+    end
     local packet = packet_meta:create_request({
         opcode = opcodes.SASLAuth,
-        key = 'CRAM-MD5',
+        key = auth_method,
+        value = value
     })
     local sasl_packet, err = prcess_sock_packet(sock, packet)
+
     if not sasl_packet then
         return nil, "failed to get challenge: " .. err
     end
-    return sasl_packet.value
+    return sasl_packet.value, "success", nonce
+end
+local function xor_bytestr( a, b )
+    local res = ""    
+    for i=1,#a do
+        res = res .. string.char(bit.bxor(string.byte(a,i,i), string.byte(b, i, i)))
+    end
+    return res
 end
 
-local function sasl_step(sock, vbucket, challenge)
-    local token = hmac(vbucket.password, challenge)
+local function pbkdf2_hmac_sha1( pbkdf2_key, iterations, salt, len )
+    local u1 = ngx.hmac_sha1(pbkdf2_key, salt .. string.char(0) .. string.char(0) .. string.char(0) .. string.char(1))
+    local ui = u1
+    for i=1,iterations-1 do
+        u1 = ngx.hmac_sha1(pbkdf2_key, u1)
+        ui = xor_bytestr(ui, u1)
+    end
+    if #ui < len then
+        for i=1,len-(#ui) do
+            ui = string.char(0) .. ui
+        end
+    end
+    return ui
+end
 
+local function sasl_step(sock, client,auth_method,challenge,nonce)
+    if auth_method == "PLAIN" then 
+        return nil,"error params"
+    end
+    local parsed_t = {}
+    for k, v in string.gmatch(challenge, "(%w+)=([^,]*)") do
+        parsed_t[k] = v
+    end
+
+    local iterations = tonumber(parsed_t['i'])
+    local salt = parsed_t['s']
+
+    local rnonce = parsed_t['r']
+    if not string.sub(rnonce, 1, 12) == nonce then
+        return nil, 'Server returned an invalid nonce.'
+    end
+    local without_proof = "c=biws,r=" .. rnonce
+    local pbkdf2_key = ngx.md5(client.username .. ":membercached:" .. client.password)
+    local salted_pass = pbkdf2_hmac_sha1(client.password,iterations,ngx.decode_base64(salt),20)
+    local client_key = ngx.hmac_sha1(salted_pass, "Client Key")
+    local stored_key = ngx.sha1_bin(client_key)
+    local auth_msg = "n="  .. client.username .. ",r=" .. nonce .. ',' .. challenge .. ',' .. without_proof
+    local client_sig = ngx.hmac_sha1(stored_key, auth_msg)
+    local client_key_xor_sig = xor_bytestr(client_key, client_sig)
+    local client_proof = "p=" .. ngx.encode_base64(client_key_xor_sig)
+    local client_final = without_proof .. ',' .. client_proof
+    local server_key = ngx.hmac_sha1(salted_pass, "Server Key")
+    local server_sig = ngx.hmac_sha1(server_key, auth_msg)
+    auth_method = auth_method or 'SCRAM-SHA1'
     local packet = packet_meta:create_request({
         opcode = opcodes.SASLStep,
-        key = 'CRAM-MD5',
-        value = vbucket.name .. ' ' .. token,
+        key = auth_method,
+        value = client_final
     })
-
     local step_packet, err = prcess_sock_packet(sock, packet)
     if not step_packet then
         return nil, "failed to do chanllenge: " .. err
     end
+    challenge = step_packet.value
+    parsed_t = {}
+    for k, v in string.gmatch(challenge, "(%w+)=([^,]*)") do
+        parsed_t[k] = v
+    end
+    if parsed_t['v'] ~= ngx.encode_base64(server_sig) then
+        return nil, "Server returned an invalid signature."
+    end
+
     return (step_packet.value == 'Authenticated' or step_packet.value ~= 'Auth failure') or nil, step_packet.value
 end
 
@@ -637,13 +741,11 @@ local function create_connect(client, server)
         if not list then
             return nil, sasl_err
         end
-
-        local challenge, auth_err = sasl_auth(sock)
+        local challenge, auth_err, nonce = sasl_auth(sock,client,"SCRAM-SHA1")
         if not challenge then
             return nil, 'failed to sasl auth: ' .. auth_err
         end
-
-        local has_auth, step_err = sasl_step(sock, client.vbucket, challenge)
+        local has_auth, step_err = sasl_step(sock, client,"SCRAM-SHA1",challenge,nonce)
         if not has_auth then
             return nil, 'failed to sasl step: ' .. step_err
         end
@@ -700,13 +802,11 @@ end
 
 local function process_multi_packets(client, packets)
     local resps, errors = {}, {}
-
     local socks, err = group_packet_by_sock(client, packets)
     if not socks then
         return nil, err
     end
     rewrite_packet(socks)
-
     for sock, sock_packets in pairs(socks) do
         for _, packet in ipairs(sock_packets) do
             local bytes, send_err = packet:send_packet(sock)
@@ -733,11 +833,9 @@ local function process_multi_packets(client, packets)
         end
         sock:setkeepalive(pool_max_idle_timeout, pool_size)
     end
-
     if #errors > 0 then
         log_info('process_multi_packets has some errors. errors=', cjson.encode(errors))
     end
-
     return resps
 end
 
@@ -759,7 +857,6 @@ local function n1ql_config(client)
     if #n1ql_nodes > 0 then
         return
     end
-
     local req_packet = packet_meta:create_request({
         opcode = opcodes.GetClusterConfig,
         key = '',
@@ -771,6 +868,7 @@ local function n1ql_config(client)
     end
 
     local config = cjson.decode(value)
+
     local nodes = config['nodesExt']
     for _, node in ipairs(nodes) do
         local services = node['services']
@@ -780,15 +878,17 @@ local function n1ql_config(client)
     end
 end
 
-local query_service = '/query/service?'
+local query_service = '/query/service'
 
-local function query_n1ql(n1ql_nodes, n1ql)
+local function query_n1ql(n1ql_nodes, n1ql,username,password)
+    local token = base64(username .. ':' .. password)
+
     local n1ql_node = n1ql_nodes[random(1, #n1ql_nodes)]
-    local resp = http_request(n1ql_node[1], n1ql_node[2], query_service .. ngx_encode_args({ statement = n1ql }))
+    local resp = http_post(n1ql_node[1], n1ql_node[2], query_service, {statement= n1ql},token)
     return cjson.decode(resp)
 end
 
-function vbuckets:bucket(host_ports, bucket_name, password, cluster)
+function vbuckets:bucket(host_ports, bucket_name, username, password, cluster)
     local clustername = cluster or "default"
     local clu = vbuckets[clustername]
     if not clu then
@@ -800,7 +900,7 @@ function vbuckets:bucket(host_ports, bucket_name, password, cluster)
             'couchbae_fetch_config' .. (ngx_crc32(tostring(ngx.ctx)) % 20
             + ngx_crc32(tostring(clustername)) % 20), 0, 1)
         if fetch_able then
-            vbucket = create_vbucket(host_ports, bucket_name, password)
+            vbucket = create_vbucket(host_ports, bucket_name, username, password)
             if not vbucket then
                 return nil, 'fail to build bucket'
             end
@@ -816,11 +916,13 @@ function vbuckets:bucket(host_ports, bucket_name, password, cluster)
     return vbucket
 end
 
-function _M:create_client(host_ports, bucket_name, password, cluster)
+function _M:create_client(host_ports, bucket_name, username, password, cluster)
     local client = {
-        vbucket = vbuckets:bucket(host_ports, bucket_name, password, cluster),
+        vbucket = vbuckets:bucket(host_ports, bucket_name, username, password, cluster),
         socks = {},
         n1ql_nodes = {},
+        username = username,
+        password = password
     }
     if not client.vbucket then
         return nil, 'fail to create_client'
@@ -834,6 +936,7 @@ function _M:get(key)
     local req_packet = packet_meta:create_request({
         opcode = opcodes.Get,
         key = key,
+        -- data_type = data_type or 0x01
     })
 
     local value, err = process_packet(self, req_packet)
@@ -860,8 +963,25 @@ function _M:get_from_replica(key)
     return value
 end
 
-function _M:set(key, value, expir)
+function _M:hello()
 
+    local req_packet = packet_meta:create_request({
+        opcode = opcodes.Hello,
+        key = "mchello v1.0",
+        value = string.char(11)
+    })
+
+    local ori_value, err = process_packet(self, req_packet)
+    if not ori_value then
+        return nil, "failed to set key: " .. tostring(err)
+    end
+    return ori_value
+end
+
+function _M:set(key, value, expir, data_type)
+    if type(value) == "table" then 
+        value = cjson.encode(value)
+    end
     local req_packet = packet_meta:create_request({
         opcode = opcodes.Set,
         key = key,
@@ -893,7 +1013,6 @@ end
 
 function _M:get_bluk(...)
     local resp_values = {}
-
     local req_packets = {}
     for _, key in ipairs({ ... }) do
         req_packets[#req_packets + 1] = packet_meta:create_request({
@@ -903,6 +1022,7 @@ function _M:get_bluk(...)
     end
 
     local resp_packets, err = process_multi_packets(self, req_packets)
+
     if not resp_packets then
         return nil, "failed to get_bluk: " .. tostring(err)
     end
@@ -922,8 +1042,7 @@ function _M:query(n1ql)
     if #n1ql_nodes == 0 then
         return nil, 'server is not support the N1QL.'
     end
-
-    local value = query_n1ql(n1ql_nodes, n1ql)
+    local value = query_n1ql(n1ql_nodes, n1ql,self.username,self.password)
     if value.status == 'success' then
         return value.results
     end
