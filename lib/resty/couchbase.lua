@@ -86,6 +86,7 @@ local function http_post(host, port, url, data,token)
     local resp,err = httpc:request_uri("http://".. host .. ":" .. port,request)
     if not resp or err then 
         log_error("请求失败！")
+        return nil,err
     end
     return resp.body
 end
@@ -884,7 +885,10 @@ local function query_n1ql(n1ql_nodes, n1ql,username,password)
     local token = base64(username .. ':' .. password)
 
     local n1ql_node = n1ql_nodes[random(1, #n1ql_nodes)]
-    local resp = http_post(n1ql_node[1], n1ql_node[2], query_service, {statement= n1ql},token)
+    local resp,err = http_post(n1ql_node[1], n1ql_node[2], query_service, {statement= n1ql},token)
+    if not resp or err then 
+        return nil,err
+    end
     return cjson.decode(resp)
 end
 
@@ -1042,12 +1046,12 @@ function _M:query(n1ql)
     if #n1ql_nodes == 0 then
         return nil, 'server is not support the N1QL.'
     end
-    local value = query_n1ql(n1ql_nodes, n1ql,self.username,self.password)
-    if value.status == 'success' then
+    local value,err = query_n1ql(n1ql_nodes, n1ql,self.username,self.password)
+    if value then
         return value.results
     end
 
-    return nil, value.errors[1]
+    return nil, err
 end
 
 function _M:set_timeout(timeout)
