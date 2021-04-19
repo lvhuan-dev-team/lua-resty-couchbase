@@ -1,12 +1,12 @@
 rockspec_format = "3.0"
 package = "lua-resty-couchbase"
-version = "0.3-1"
+version = "0.3-2"
 source = {
-   url = "git+https://github.com/iqiyi/lua-resty-couchbase.git"
+   url = "git+https://github.com/lvhuan-dev-team/lua-resty-couchbase.git"
 }
 description = {
    detailed = "lua-resty-couchbase - Lua couchbase client driver for the ngx_lua based on the cosocket API.",
-   homepage = "https://github.com/iqiyi/lua-resty-couchbase",
+   homepage = "https://github.com/lvhuan-dev-team/lua-resty-couchbase",
    license = "BSD License 2.0",
    labels = { "CouchBase", "OpenResty", "Cosocket", "Nginx" }
 }
