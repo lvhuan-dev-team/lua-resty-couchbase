@@ -56,6 +56,7 @@ local ngx_header = ngx.header
 
 local ngx_INFO = ngx.INFO
 local ngx_ERR  = ngx.ERR
+local ngx_DEBUG = ngx.DEBUG
 
 local ngx_socket_tcp = ngx.socket.tcp
 local ngx_shared_ldict = ngx.shared.ldict
@@ -81,6 +82,10 @@ end
 
 local function log_error(...)
     ngx_log(ngx_ERR, ...)
+end
+
+local function log_debug(...)
+    ngx_log(ngx_DEBUG, ...)
 end
 
 
@@ -215,7 +220,7 @@ local function fetch_configs(servers, bucket_name, username, password)
             -- bug fixed with body is 'Requested resource not found.'.
             if strfind(body, '^{') then
                 local config = cjson.decode(body)
-                log_info("fetch config" .. tostring(#configs + 1) .. ": ", body)
+                log_debug("fetch config" .. tostring(#configs + 1) .. ": ", body)
                 configs[#configs + 1] = config
                 break
             else
@@ -229,6 +234,7 @@ local function fetch_configs(servers, bucket_name, username, password)
         end
     end
 
+    log_debug("configs: ",cjson.encode(configs))
     return configs
 end
 
@@ -248,6 +254,8 @@ local function create_vbucket(host_ports, bucket_name, username, password)
         nodes = {},
         vmap = {},
     }
+
+    log_debug("vbucket: ", cjson.encode(vbucket))
 
     local configs = fetch_configs(servers, bucket_name, username, password)
     if #configs == 0 then
@@ -288,6 +296,7 @@ local function create_vbucket(host_ports, bucket_name, username, password)
         end
     end
 
+    log_debug("vbucket: ", cjson.encode(vbucket))
     return vbucket
 end
 
@@ -299,7 +308,8 @@ local function reload_vbucket(old_vbucket)
     if ngx_now() - last_reload > 15 then
         last_reload = ngx_now()
         log_error('try to refresh couchbase conifg.')
-        local new_vbucket = create_vbucket(old_vbucket.host_ports, old_vbucket.name, old_vbucket.username, old_vbucket.password)
+        local new_vbucket = create_vbucket(old_vbucket.host_ports, old_vbucket.name,
+                                           old_vbucket.username, old_vbucket.password)
 
         if new_vbucket then
             old_vbucket.mast = new_vbucket.mast
@@ -642,80 +652,315 @@ local function prcess_sock_packet(sock, packet)
     return packet:read_packet(sock)
 end
 
+-- local magic_bytes = {
+--     req_c2s = 0x80,	-- Request packet from client to server
+--     res_s2c = 0x81,	-- Response packet from server to client
+--     res_felx= 0x18,	-- Response packet containing flex extras
+--     req_s2c = 0x82,	-- Request packet from server to client
+--     res_c2s = 0x83	-- Response packet from client to server
+-- }
 
 local opcodes = {
     Hello = 0x1f,
     -- base opcode
-    Get = 0x00,
-    Set = 0x01,
-    Add = 0x02,
-    Replace = 0x03,
-    Delete = 0x04,
-    Increment = 0x05,
-    Decrement = 0x06,
-    Quit = 0x07,
-    Flush = 0x08,
+    Get         = 0x00,
+    Set         = 0x01,
+    Add         = 0x02,
+    Replace     = 0x03,
+    Delete      = 0x04,
+    Increment   = 0x05,
+    Decrement   = 0x06,
+    Quit        = 0x07,
+    Flush       = 0x08,
     -- adv opcode
-    GetQ = 0x09,
-    ['No-op'] = 0x0A,
-    Version = 0x0B,
-    GetK = 0x0C,
-    GetKQ = 0x0D,
-    Append = 0x0E,
-    Prepend = 0x0F,
-    Stat = 0x10,
-    SetQ = 0x11,
-    AddQ = 0x12,
-    ReplaceQ = 0x13,
-    DeleteQ = 0x14,
-    IncrementQ = 0x15,
-    DecrementQ = 0x16,
-    QuitQ = 0x17,
-    FlushQ = 0x18,
-    AppendQ = 0x19,
-    PrependQ = 0x1A,
+    GetQ        = 0x09,
+    ['No-op']   = 0x0a,
+    Version     = 0x0b,
+    GetK        = 0x0c,
+    GetKQ       = 0x0d,
+    Append      = 0x0e,
+    Prepend     = 0x0f,
+    Stat        = 0x10,
+    SetQ        = 0x11,
+    AddQ        = 0x12,
+    ReplaceQ    = 0x13,
+    DeleteQ     = 0x14,
+    IncrementQ  = 0x15,
+    DecrementQ  = 0x16,
+    QuitQ       = 0x17,
+    FlushQ      = 0x18,
+    AppendQ     = 0x19,
+    PrependQ    = 0x1A,
+    Verbosity   = 0x1b,
+    Touch       = 0x1c,
+    GAT         = 0x1d,
+    GATQ        = 0x1e,
+    HELO        = 0x1f,
+
     -- SASL opcode
-    SASList = 0x20,
-    SASLAuth = 0x21,
-    SASLStep = 0x22,
-    GetFromReplica = 0x83,
+    SASLList    = 0x20,
+    SASLAuth    = 0x21,
+    SASLStep    = 0x22,
+
+    -- Ioctl
+    IoctlGet    = 0x23,
+    IoctlSet    = 0x24,
+
+    -- Config
+    ConfigValidate      = 0x25,
+    ConfigReload        = 0x26,
+
+    -- Audit
+    AuditPut            = 0x27,
+    AuditConfigReload   = 0x28,
+
+    Shutdown            = 0x29,
+
+    --not supported 0x30 ~ 0x3c
+    RGet        = 0x30,
+    RSet        = 0x31,
+    RSetQ       = 0x32,
+    RAppend     = 0x33,
+    RAppendQ    = 0x34,
+    RPrepend    = 0x35,
+    RPrependQ   = 0x36,
+    RDelete     = 0x37,
+    RDeleteQ    = 0x38,
+    RIncr       = 0x39,
+    RIncrQ      = 0x3a,
+    RDecr       = 0x3b,
+    RDecrQ      = 0x3c,
+
+    --VBucket
+    SetVBucket  = 0x3d,
+    GetVBucket  = 0x3e,
+    DelVBucket  = 0x3f,
+
+    -- TAP removed in 5.0 0x40 ~ 0x47
+    TAPConnect  = 0x40,
+    TAPMutation = 0x41,
+    TAPDelete   = 0x42,
+    TAPFlush    = 0x43,
+    TAPOpaque   = 0x44,
+    TAPVBucketSet       = 0x45,
+    TAPCheckoutStart    = 0x46,
+    TAPCheckpointEnd    = 0x47,
+
+    GetAllVbSeqnos      = 0x48,
+
+    --Dcp
+    DcpOpen             = 0x50,
+    DcpAddStream        = 0x51,
+    DcpSloseStream      = 0x52,
+    DcpStreamReq        = 0x53,
+    DcpGetFailoverLog   = 0x54,
+    DcpStreamEnd        = 0x55,
+    DcpSnapshotMarker   = 0x56,
+    DcpMutation         = 0x57,
+    DcpDeletion         = 0x58,
+    DcpExpiration       = 0x59,
+    -- (obsolete)
+    DcpFlush            = 0x5a,
+    DcpSetVbucketState  = 0x5b,
+    DcpNoop             = 0x5c,
+    DcpBufferAcknowledgement = 0x5d,
+    DcpControl          = 0x5e,
+    DcpSystemEvent      = 0x5f,
+    DcpPrepare          = 0x60,
+    DcpSeqnoAcknowledged = 0x61,
+    DcpCommit           = 0x62,
+    DcpAbort            = 0x63,
+    DcpSeqnoAdvanced    = 0x64,
+    DcpOutOfSequenceOrderSnapshot = 0x65,
+
+    --Persistence
+    StopPersistence     = 0x80,
+    StartPersistence    = 0x81,
+    SetParam            = 0x82,
+    GetReplica          = 0x83,
+    --Bucket
+    CreateBucket        = 0x85,
+    DeleteBucket        = 0x86,
+    ListBuckets         = 0x87,
+    SelectBucket        = 0x89,
+
+    ObserveSeqno        = 0x91,
+    Observe             = 0x92,
+    EvictKey            = 0x93,
+    GetLocked           = 0x94,
+    UnlockKey           = 0x95,
+    GetFailoverLog      = 0x96,
+    LastClosedCheckpoint = 0x97,
+    --TAP removed in 5.0
+    DeregisterTapClient = 0x9e,
+    --(obsolete)
+    ResetReplicationChain   = 0x9f,
+
+    -- Meta
+    GetMeta             = 0xa0,
+    GetqMeta            = 0xa1,
+    SetWithMeta         = 0xa2,
+    SetqWithMeta        = 0xa3,
+    AddWithMeta         = 0xa4,
+    AddqWithMeta        = 0xa5,
+    --(obsolete)
+    SnapshotVbStates    = 0xa6,
+    VbucketBatchCount   = 0xa7,
+    DelWithMeta         = 0xa8,
+    DelqWithMeta        = 0xa9,
+
+    CreateCheckpoint    = 0xaa,
+    --(obsolete)
+    NotifyVbucketUpdate = 0xac,
+    EnableTraffic       = 0xad,
+    DisableTraffic      = 0xae,
+    -- (obsolete)
+    ChangeVbFilter      = 0xb0,
+    CheckpointPersistence = 0xb1,
+    ReturnMeta          = 0xb2,
+    CompactDb           = 0xb3,
+
     -- cluster
-    GetClusterConfig = 0xb5
+    SetClusterConfig    = 0xb4,
+    GetClusterConfig    = 0xb5,
+    GetRandomKey        = 0xb6,
+    SeqnoPersistence    = 0xb7,
+    GetKeys             = 0xb8,
+
+    -- Collections
+    CollectionsSetManifest = 0xb9,
+    CollectionsGetManifest = 0xba,
+    CollectionsGetCollectionId  = 0xbb,
+    CollectionsGetScopeId       = 0xbc,
+    --(obsolete)
+    SetDriftCounterState= 0xc1,
+    GetAdjustedTime     = 0xc2,
+
+    --Subdoc
+    SubdocGet           = 0xc5,
+    SubdocExists        = 0xc6,
+    SubdocDictAdd       = 0xc7,
+    SubdocDictUpsert    = 0xc8,
+    SubdocDelete        = 0xc9,
+    SubdocReplace       = 0xca,
+    SubdocArrayPushLast = 0xcb,
+    SubdocArrayPushFirst= 0xcc,
+    SubdocArrayInsert   = 0xcd,
+    SubdocArrayAddUnique= 0xce,
+    SubdocCounter       = 0xcf,
+    SubdocMultiLookup   = 0xd0,
+    SubdocMultiMutation = 0xd1,
+    SubdocGetCount      = 0xd2,
+    -- (see https://docs.google.com/document/d/1vaQJxIA5nhWJqji7X2R1xQDZadb5PabfKAid1kVe65o )
+    SubdocReplaceBodyWithXattr = 0xd3,
+
+    Scrub               = 0xf0,
+    IsaslRefresh        = 0xf1,
+    SslCertsRefresh     = 0xf2,
+    GetCmdTimer         = 0xf3,
+    SetCtrlToken        = 0xf4,
+    GetCtrlToken        = 0xf5,
+    UpdateExternalUserPermissions = 0xf6,
+    RBACRefresh         = 0xf7,
+    AUTHProvider        = 0xf8,
+    -- (for testing)
+    DropPrivilege       = 0xfb,
+    AdjustTimeOfDay     = 0xfc,
+    EwouldblockCtl      = 0xfd,
+    GetErrorPap         = 0xfe,
 }
 
 local opcode_quiet = {
-    [opcodes.Get] = opcodes.GetQ,
-    [opcodes.Set] = opcodes.SetQ,
-    [opcodes.Add] = opcodes.AddQ,
-    [opcodes.Replace] = opcodes.ReplaceQ,
-    [opcodes.Delete] = opcodes.DeleteQ,
+    [opcodes.Get]       = opcodes.GetQ,
+    [opcodes.Set]       = opcodes.SetQ,
+    [opcodes.Add]       = opcodes.AddQ,
+    [opcodes.Replace]   = opcodes.ReplaceQ,
+    [opcodes.Delete]    = opcodes.DeleteQ,
     [opcodes.Increment] = opcodes.IncrementQ,
     [opcodes.Decrement] = opcodes.DecrementQ,
-    [opcodes.Quit] = opcodes.QuitQ,
-    [opcodes.Flush] = opcodes.FlushQ,
-    [opcodes.GetK] = opcodes.GetKQ,
+    [opcodes.Quit]      = opcodes.QuitQ,
+    [opcodes.Flush]     = opcodes.FlushQ,
+    [opcodes.GetK]      = opcodes.GetKQ,
 }
 
 local status_code = {
-    [0x0000] = 'No error',
-    [0x0001] = 'Key not found',
-    [0x0002] = 'Key exists',
-    [0x0003] = 'Value too large',
-    [0x0004] = 'Invalid arguments',
-    [0x0005] = 'Item not stored',
-    [0x0006] = 'Incr/Decr on non-numeric value',
-    [0x0007] = 'Vbucket belongs to another server',
-    [0x0081] = 'Unknown command',
-    [0x0082] = 'Out of memory',
+    [0x0000] = "No error",
+    [0x0001] = "Key not found",
+    [0x0002] = "Key exists",
+    [0x0003] = "Value too large",
+    [0x0004] = "Invalid arguments",
+    [0x0005] = "Item not stored",
+    [0x0006] = "Incr/Decr on a non-numeric value",
+    [0x0007] = "The vbucket belongs to another server",
+    [0x0008] = "The connection is not connected to a bucket",
+    [0x0009] = "The requested resource is locked",
+    [0x000a] = "Stream not found for DCP message",
+    [0x000b] = "The DCP message's opaque does not match the DCP stream's",
+    [0x001f] = "The authentication context is stale, please re-authenticate",
+    [0x0020] = "Authentication error",
+    [0x0021] = "Authentication continue",
+    [0x0022] = "The requested value is outside the legal ranges",
+    [0x0023] = "Rollback required",
+    [0x0024] = "No access",
+    [0x0025] = "The node is being initialized",
+    [0x0081] = "Unknown command",
+    [0x0082] = "Out of memory",
+    [0x0083] = "Not supported",
+    [0x0084] = "Internal error",
+    [0x0085] = "Busy",
+    [0x0086] = "Temporary failure",
+    [0x0087] = "XATTR invalid syntax",
+    [0x0088] = "Unknown collection",
+    [0x008a] = "Collections manifest not applied",
+    [0x008c] = "Unknown scope",
+    [0x008d] = "DCP stream ID is invalid",
+    [0x00a0] = "Durability level invalid",
+    [0x00a1] = "Durability impossible",
+    [0x00a2] = "Synchronous write in progress",
+    [0x00a3] = "Synchronous write ambiguous",
+    [0x00a4] = "The SyncWrite is being re-committed after a change in active node",
+    [0x00c0] = "(Subdoc) The provided path does not exist in the document",
+    [0x00c1] = "(Subdoc) One of path components treats a non-dictionary as a dictionary, or a non-array as an array",
+    [0x00c2] = "(Subdoc) The path’s syntax was incorrect",
+    [0x00c3] = "(Subdoc) The path provided is too large; either the string is too long," ..
+               " or it contains too many components",
+    [0x00c4] = "(Subdoc) The document has too many levels to parse",
+    [0x00c5] = "(Subdoc) The value provided will invalidate the JSON if inserted",
+    [0x00c6] = "(Subdoc) The existing document is not valid JSON",
+    [0x00c7] = "(Subdoc) The existing number is out of the valid range for arithmetic ops",
+    [0x00c8] = "(Subdoc) The operation would result in a number outside the valid range",
+    [0x00c9] = "(Subdoc) The requested operation requires the path to not already exist, but it exists",
+    [0x00ca] = "(Subdoc) Inserting the value would cause the document to be too deep",
+    [0x00cb] = "(Subdoc) An invalid combination of commands was specified",
+    [0x00cc] = "(Subdoc) Specified key was successfully found, but one or more path operations failed. " ..
+" Examine the individual lookup_result (MULTI_LOOKUP) / mutation_result (MULTI_MUTATION) structures for details.",
+    [0x00cd] = "(Subdoc) Operation completed successfully on a deleted document",
+    [0x00ce] = "(Subdoc) The flag combination doesn't make any sense",
+    [0x00cf] = "(Subdoc) The key combination of the xattrs is not allowed",
+    [0x00d0] = "(Subdoc) The server don't know about the specified macro",
+    [0x00d1] = "(Subdoc) The server don't know about the specified virtual attribute",
+    [0x00d2] = "(Subdoc) Can't modify virtual attributes",
+    [0x00d3] = "(Subdoc) One or more paths in a multi-path command failed on a deleted document",
+    [0x00d4] = "(Subdoc) Invalid XATTR order (xattrs should come first)",
+    [0x00d5] = "(Subdoc) The server don't know this virtual macro",
+    [0x00d6] = "(Subdoc) Only deleted documents can be revived",
+    [0x00d7] = "(Subdoc) A deleted document can't have a value",
 }
 
-_M._unused_f2 = status_code
+-- local data_types = {
+--     ["JSON"] = 0x01,
+--     ["Snappy compressed"] = 0x02,
+--     ["Extended attributes (XATTR)"] = 0x04
+-- }
+
+
+_M._unued_f2 = status_code
 
 
 local function sasl_list(sock)
 
     local request_packet = packet_meta:create_request({
-        opcode = opcodes.SASList
+        opcode = opcodes.SASLList
     })
 
     local packet, err = prcess_sock_packet(sock, request_packet)
@@ -731,7 +976,7 @@ local function sasl_list(sock)
 end
 
 
-local function sasl_auth(sock,client,auth_method)
+local function sasl_auth(sock, client, auth_method)
     local value,nonce = nil
 
     auth_method = auth_method or "PLAIN"
@@ -850,6 +1095,26 @@ local function sasl_step(sock, client, auth_method, challenge, nonce)
     return (step_packet.value == 'Authenticated' or step_packet.value ~= 'Auth failure') or nil, step_packet.value
 end
 
+local function select_bucket(sock, client)
+    if client.vbucket.name == client.vbucket.username then
+        return true
+    end
+
+    local req_packet = packet_meta:create_request({
+        opcode = opcodes.SelectBucket,
+        key = client.vbucket.name,
+        -- TODO suppot gzip.
+        opaque = 0xefbeadde
+    })
+
+    local sele_packet, err = prcess_sock_packet(sock, req_packet)
+    if not sele_packet then
+        return nil, "failed to select_bucket: " .. tostring(err)
+    end
+
+    return sele_packet.value or sele_packet.status
+end
+
 
 local function get_pool_name(client, server)
     return server.host .. ':' .. server.port .. ':' .. client.vbucket.name
@@ -886,11 +1151,12 @@ local function create_connect(client, server)
 
     local reused = sock:getreusedtimes()
     if not (reused and reused > 0) then
-        log_info('try to auth : host=', server.host, ',port=', server.port, ',bucket=', client.vbucket.name)
+        log_info('try to auth : host=', server.host, ', port=', server.port, ', bucket=', client.vbucket.name)
 
         local list, sasl_err = sasl_list(sock)
         if not list then
-            log_info('get sasl_list failure : host=', server.host, ',port=', server.port, ',bucket=', client.vbucket.name, "error: ",sasl_err)
+            log_info('get sasl_list failure : host=', server.host, ', port=', server.port,
+                     ', bucket=', client.vbucket.name, "error: ",sasl_err)
             return nil, sasl_err
         end
 
@@ -902,6 +1168,11 @@ local function create_connect(client, server)
         local has_auth, step_err = sasl_step(sock, client, "SCRAM-SHA1", challenge, nonce)
         if not has_auth then
             return nil, 'failed to sasl step: ' .. step_err
+        end
+
+        local has_sele, sele_err = select_bucket(sock, client)
+        if not has_sele then
+            return nil, 'failed to select bucket: ' .. sele_err
         end
     end
 
@@ -981,7 +1252,8 @@ local function process_multi_packets(client, packets)
     for sock, sock_packets in pairs(socks) do
         for _, packet in ipairs(sock_packets) do
             local bytes, send_err = packet:send_packet(sock)
-            log_info("bytes: ", bytes, ", send_err: ", send_err, " packet: ", cjson.encode(packet))
+            log_info("process_multi_packets bytes: ", bytes, ", send_err: ", send_err,
+                     " packet: ", cjson.encode(packet))
             if not bytes then
                 errors[packet] = send_err
             end
@@ -992,7 +1264,8 @@ local function process_multi_packets(client, packets)
         for _, packet in ipairs(sock_packets) do
             if errors[packet] == nil then
                 local resp, read_err = packet:read_packet(sock)
-                log_info("resp: ", cjson.encode(resp), ", read_err: ", read_err, " packet: ", cjson.encode(packet))
+                log_info("process_multi_packets resp: ", cjson.encode(resp), ", read_err: ", read_err,
+                         " packet: ", cjson.encode(packet))
                 if not resp then
                     errors[packet] = read_err
                 else
@@ -1066,7 +1339,7 @@ end
 local query_service = '/query/service'
 
 
-local function query_n1ql(n1ql_nodes, n1ql,username,password)
+local function query_n1ql(n1ql_nodes, n1ql, username, password)
     local token = ngx_encode_base64(username .. ':' .. password)
 
     local n1ql_node = n1ql_nodes[random(1, #n1ql_nodes)]
@@ -1133,9 +1406,9 @@ function _M:create_client(host_ports, bucket_name, username, password, cluster)
 end
 
 
-function _M:get(key)
+function _M:read(opcode, key)
     local req_packet = packet_meta:create_request({
-        opcode = opcodes.Get,
+        opcode = opcode,
         key = key,
         -- data_type = data_type or 0x01
     })
@@ -1146,6 +1419,22 @@ function _M:get(key)
     end
 
     return value
+end
+
+function _M:get(key)
+    return self:read(opcodes.Get, key)
+end
+
+function _M:getq(key)
+    return self:read(opcodes.GetQ, key)
+end
+
+function _M:getk(key)
+    return self:read(opcodes.GetK, key)
+end
+
+function _M:getkq(key)
+    return self:read(opcodes.GetKQ, key)
 end
 
 
@@ -1180,14 +1469,13 @@ function _M:hello()
     return ori_value
 end
 
-
-function _M:set(key, value, expir, data_type)
+function _M:write(opcode, key, value, expir, data_type)
     if type(value) == "table" then
         value = cjson.encode(value)
     end
 
     local req_packet = packet_meta:create_request({
-        opcode = opcodes.Set,
+        opcode = opcode,
         key = key,
         value = value,
         -- TODO suppot gzip.
@@ -1196,12 +1484,35 @@ function _M:set(key, value, expir, data_type)
 
     local ori_value, err = process_packet(self, req_packet)
     if not ori_value then
-        return nil, "failed to set key: " .. tostring(err)
+        return nil, "failed to ".. opcode .." key: " .. tostring(err)
     end
 
     return ori_value
 end
 
+function _M:set(key, value, expir, data_type)
+    return self:write(opcodes.Set, key, value, expir, data_type)
+end
+
+function _M:setq(key, value, expir, data_type)
+    return self:write(opcodes.SetQ, key, value, expir, data_type)
+end
+
+function _M:add(key, value, expir, data_type)
+    return self:write(opcodes.Add, key, value, expir, data_type)
+end
+
+function _M:addq(key, value, expir, data_type)
+    return self:write(opcodes.AddQ, key, value, expir, data_type)
+end
+
+function _M:replace(key, value, expir, data_type)
+    return self:write(opcodes.Replace, key, value, expir, data_type)
+end
+
+function _M:replaceq(key, value, expir, data_type)
+    return self:write(opcodes.ReplaceQ, key, value, expir, data_type)
+end
 
 function _M:delete(key)
     local req_packet = packet_meta:create_request({
@@ -1242,6 +1553,22 @@ function _M:get_bluk(...)
     end
 
     return resp_values
+end
+
+function _M:select_bucket(bucket_name)
+    local req_packet = packet_meta:create_request({
+        opcode = opcodes.SelectBucket,
+        key = bucket_name,
+        -- TODO suppot gzip.
+        opaque = 0xefbeadde
+    })
+
+    local ori_value, err = process_packet(self, req_packet)
+    if not ori_value then
+        return nil, "failed to select_bucket: " .. tostring(err)
+    end
+
+    return ori_value
 end
 
 
