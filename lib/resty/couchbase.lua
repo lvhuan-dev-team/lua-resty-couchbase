@@ -52,7 +52,7 @@ local ngx_ctx = ngx.ctx
 
 local ngx_sleep = ngx.sleep
 local ngx_header = ngx.header
-local ngx_is_subrequest = ngx.is_subrequest
+--local ngx_is_subrequest = ngx.is_subrequest
 
 local ngx_INFO = ngx.INFO
 local ngx_ERR  = ngx.ERR
@@ -215,6 +215,7 @@ local function fetch_configs(servers, bucket_name, username, password)
             -- bug fixed with body is 'Requested resource not found.'.
             if strfind(body, '^{') then
                 local config = cjson.decode(body)
+                log_info("fetch config" .. tostring(#configs + 1) .. ": ", body)
                 configs[#configs + 1] = config
                 break
             else
@@ -298,7 +299,7 @@ local function reload_vbucket(old_vbucket)
     if ngx_now() - last_reload > 15 then
         last_reload = ngx_now()
         log_error('try to refresh couchbase conifg.')
-        local new_vbucket = create_vbucket(old_vbucket.host_ports, old_vbucket.name, old_vbucket.password)
+        local new_vbucket = create_vbucket(old_vbucket.host_ports, old_vbucket.name, old_vbucket.username, old_vbucket.password)
 
         if new_vbucket then
             old_vbucket.mast = new_vbucket.mast
@@ -537,9 +538,9 @@ function packet_meta:send_packet(sock)
     set_byte(header, packet.data_type)
     set_byte2(header, packet.vbucket_id)
 
-    if  packet.key == "PLAIN" and packet.value  then
-        packet.total_len = packet.total_len + 1
-    end
+--    if  packet.key == "PLAIN" and packet.value  then
+--         packet.total_len = packet.total_len + 1
+--     end
 
     set_byte4(header, packet.total_len)
     set_byte4(header, packet.opaque)
@@ -550,9 +551,9 @@ function packet_meta:send_packet(sock)
     bytes[#bytes + 1] = packet.extra
     bytes[#bytes + 1] = packet.key
 
-    if packet.key == "PLAIN" and packet.value then
-        bytes[#bytes + 1] = strchar(0)
-    end
+    -- if packet.key == "PLAIN" and packet.value then
+    --     bytes[#bytes + 1] = strchar(0)
+    -- end
 
     bytes[#bytes + 1] = packet.value
     return sock:send(tbl_concat(bytes))
@@ -601,7 +602,7 @@ function packet_meta:read_packet(sock)
         if band(flag, 0x0002) ~= 0 then
             ngx_header['Content-Encoding'] = 'gzip'
             -- sub_request does not get the Content-Encoding value.
-            if ngx_is_subrequest then
+            if ngx.is_subrequest then
                 ngx_header['Sub-Req-Content-Encoding'] = 'gzip'
             end
         end
@@ -742,7 +743,7 @@ local function sasl_auth(sock,client,auth_method)
     end
 
     if auth_method == "PLAIN" then
-        value = client.username .. strchar(0) .. client.password
+        value = client.username .. strchar(0) .. client.password .. strchar(0)
     end
 
     local packet = packet_meta:create_request({
@@ -889,15 +890,16 @@ local function create_connect(client, server)
 
         local list, sasl_err = sasl_list(sock)
         if not list then
+            log_info('get sasl_list failure : host=', server.host, ',port=', server.port, ',bucket=', client.vbucket.name, "error: ",sasl_err)
             return nil, sasl_err
         end
 
-        local challenge, auth_err, nonce = sasl_auth(sock,client,"SCRAM-SHA1")
+        local challenge, auth_err, nonce = sasl_auth(sock, client, "SCRAM-SHA1")
         if not challenge then
             return nil, 'failed to sasl auth: ' .. auth_err
         end
 
-        local has_auth, step_err = sasl_step(sock, client,"SCRAM-SHA1",challenge,nonce)
+        local has_auth, step_err = sasl_step(sock, client, "SCRAM-SHA1", challenge, nonce)
         if not has_auth then
             return nil, 'failed to sasl step: ' .. step_err
         end
@@ -920,6 +922,7 @@ local function group_packet_by_sock(client, packets)
             if not connect then
 
                 if strfind(err, 'connection refused') then
+                    log_info(err)
                     reload_vbucket(client.vbucket)
                 end
 
@@ -969,6 +972,7 @@ local function process_multi_packets(client, packets)
     local socks, err = group_packet_by_sock(client, packets)
 
     if not socks then
+        log_error(" try group_packet_by_sock failure, error: ", err)
         return nil, err
     end
 
@@ -977,6 +981,7 @@ local function process_multi_packets(client, packets)
     for sock, sock_packets in pairs(socks) do
         for _, packet in ipairs(sock_packets) do
             local bytes, send_err = packet:send_packet(sock)
+            log_info("bytes: ", bytes, ", send_err: ", send_err, " packet: ", cjson.encode(packet))
             if not bytes then
                 errors[packet] = send_err
             end
@@ -987,6 +992,7 @@ local function process_multi_packets(client, packets)
         for _, packet in ipairs(sock_packets) do
             if errors[packet] == nil then
                 local resp, read_err = packet:read_packet(sock)
+                log_info("resp: ", cjson.encode(resp), ", read_err: ", read_err, " packet: ", cjson.encode(packet))
                 if not resp then
                     errors[packet] = read_err
                 else
@@ -1014,11 +1020,13 @@ local function process_packet(client, packet)
     local packets, err = process_multi_packets(client, { packet })
 
     if not (packets and packets[1]) then
+        log_error("try process_multi_packets failure. error: ", err, " packets: ", cjson.encode(packets))
         return nil, err
     end
 
     local resp = packets[1]
     if resp.status ~= 0x0 then
+        log_error("respone status error, ", err, ", data: ", cjson.encode(resp))
         return nil, resp.value
     end
 
@@ -1161,7 +1169,7 @@ function _M:hello()
     local req_packet = packet_meta:create_request({
         opcode = opcodes.Hello,
         key = "mchello v1.0",
-        value = strchar(11)
+        value = strchar(11)..strchar(0)
     })
 
     local ori_value, err = process_packet(self, req_packet)
