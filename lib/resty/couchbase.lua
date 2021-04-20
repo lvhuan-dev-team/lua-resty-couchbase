@@ -114,16 +114,16 @@ local function http_post(host, port, url, data, token)
     local body_data = ngx_encode_args(data)
 
     local request = {
-        method = "POST",
-        path = url,
-        body = body_data,
+        method  = "POST",
+        path    = url,
+        body    = body_data,
         headers = {
-            ["Content-Type"] = "application/x-www-form-urlencoded",
-            ["Content-Length"] = #body_data,
-            ["User-Agent"] = _USER_AGENT,
-            ["Authorization"] = 'Basic ' .. token,
-            ["Host"] = host .. ":" .. port,
-            ["Accept"] = "*/*"
+            ["Content-Type"]    = "application/x-www-form-urlencoded",
+            ["Content-Length"]  = #body_data,
+            ["User-Agent"]      = _USER_AGENT,
+            ["Authorization"]   = 'Basic ' .. token,
+            ["Host"]            = host .. ":" .. port,
+            ["Accept"]          = "*/*"
         }
     }
 
@@ -243,16 +243,16 @@ local function create_vbucket(host_ports, bucket_name, username, password)
 
     local servers = host2server(host_ports, true)
     local vbucket = {
-        host_ports = host_ports,
-        servers = servers,
-        name = bucket_name,
-        username = username,
-        password = password,
-        type = 'membase',
-        hash = 'CRC',
-        mast = -1,
-        nodes = {},
-        vmap = {},
+        host_ports  = host_ports,
+        servers     = servers,
+        name        = bucket_name,
+        username    = username,
+        password    = password,
+        type    = 'membase',
+        hash    = 'CRC',
+        mast    = -1,
+        nodes   = {},
+        vmap    = {},
     }
 
     log_debug("vbucket: ", cjson.encode(vbucket))
@@ -274,11 +274,11 @@ local function create_vbucket(host_ports, bucket_name, username, password)
                     local bucket_map = bucket['vBucketMap']
                     vbucket.mast = #bucket_map - 1
 
-                    local vmap = vbucket.vmap
+                    local vmap  = vbucket.vmap
                     local nodes = vbucket.nodes
 
                     for _, map in ipairs(bucket_map) do
-                        local master = map[1]
+                        local master  = map[1]
                         local replica = map[2]
                         tbl_insert(vmap, { nodes[master + 1], nodes[replica + 1] })
                     end
@@ -312,10 +312,10 @@ local function reload_vbucket(old_vbucket)
                                            old_vbucket.username, old_vbucket.password)
 
         if new_vbucket then
-            old_vbucket.mast = new_vbucket.mast
+            old_vbucket.mast  = new_vbucket.mast
             old_vbucket.nodes = new_vbucket.nodes
-            old_vbucket.vmap = new_vbucket.vmap
-            old_vbucket.sock = new_vbucket.sock
+            old_vbucket.vmap  = new_vbucket.vmap
+            old_vbucket.sock  = new_vbucket.sock
         end
     end
 end
@@ -351,30 +351,33 @@ local function byte2str(byte)
 end
 
 
--- local function hmac(k, c)
---     local k_opad = {}
---     local k_ipad = {}
+local function hmac(k, c)
+    local k_opad = {}
+    local k_ipad = {}
 
---     if k then
---         if strlen(k) > 64 then
---             k = ngx_md5_bin(k)
---         end
---         for i = 1, strlen(k), 1 do
---             k_opad[i] = strbyte(k, i)
---             k_ipad[i] = strbyte(k, i)
---         end
---     end
+    if k then
+        if strlen(k) > 64 then
+            k = ngx_md5_bin(k)
+        end
+        for i = 1, strlen(k), 1 do
+            k_opad[i] = strbyte(k, i)
+            k_ipad[i] = strbyte(k, i)
+        end
+    end
 
---     for i = 1, 64, 1 do
---         k_opad[i] = bxor(k_opad[i] or 0x0, 0x5c)
---         k_ipad[i] = bxor(k_ipad[i] or 0x0, 0x36)
---     end
---     k_opad = byte2str(k_opad)
---     k_ipad = byte2str(k_ipad)
+    for i = 1, 64, 1 do
+        k_opad[i] = bxor(k_opad[i] or 0x0, 0x5c)
+        k_ipad[i] = bxor(k_ipad[i] or 0x0, 0x36)
+    end
+    k_opad = byte2str(k_opad)
+    k_ipad = byte2str(k_ipad)
 
---     -- hash(k_opad || hash(k_ipad,c))
---     return ngx_md5(k_opad .. ngx_md5_bin(k_ipad .. c))
--- end
+    -- hash(k_opad || hash(k_ipad,c))
+    return ngx_md5(k_opad .. ngx_md5_bin(k_ipad .. c))
+end
+
+
+_M._unused_f5 = hmac
 
 
 local function get_byte2(data, i)
@@ -473,18 +476,18 @@ local packet_mt = { __index = packet_meta }
 
 function packet_meta:create_request(...)
     local req = {
-        magic = 0x80,
-        opcode = 0x00,
-        key_len = 0x00,
-        extra_len = 0x00,
-        data_type = 0x00,
-        vbucket_id = 0x00,
-        total_len = 0x00,
-        opaque = 0x00,
-        cas = 0x00,
-        extra = nil,
-        key = nil,
-        value = nil,
+        magic       = 0x80,
+        opcode      = 0x00,
+        key_len     = 0x00,
+        extra_len   = 0x00,
+        data_type   = 0x00,
+        vbucket_id  = 0x00,
+        total_len   = 0x00,
+        opaque      = 0x00,
+        cas         = 0x00,
+        extra       = nil,
+        key         = nil,
+        value       = nil,
     }
 
     for k, v in pairs(...) do
@@ -498,18 +501,18 @@ end
 
 function packet_meta:create_response(...)
     local resp = {
-        magic = 0x81,
-        opcode = 0x00,
-        key_len = 0x00,
-        extra_len = 0x00,
-        data_type = 0x00,
-        status = 0x00,
-        total_len = 0x00,
-        opaque = 0x00,
-        cas = 0x00,
-        extra = nil,
-        key = nil,
-        value = nil,
+        magic       = 0x81,
+        opcode      = 0x00,
+        key_len     = 0x00,
+        extra_len   = 0x00,
+        data_type   = 0x00,
+        status      = 0x00,
+        total_len   = 0x00,
+        opaque      = 0x00,
+        cas         = 0x00,
+        extra       = nil,
+        key         = nil,
+        value       = nil,
     }
 
     for k, v in pairs(...) do
@@ -521,21 +524,24 @@ function packet_meta:create_response(...)
 end
 
 
--- local function str_to_hex(data)
+local function str_to_hex(data)
 
---     local hex_str = ""
---     for i=1, #data, 1 do
---         hex_str = hex_str .. " " .. strfmt("%02X", data:byte(i))
---     end
+    local hex_str = ""
+    for i=1, #data, 1 do
+        hex_str = hex_str .. " " .. strfmt("%02X", data:byte(i))
+    end
 
---     return hex_str
--- end
+    return hex_str
+end
+
+
+_M._unused_f4 = str_to_hex
 
 
 function packet_meta:send_packet(sock)
 
     local packet = self
-    packet.key_len = val_len(packet.key)
+    packet.key_len   = val_len(packet.key)
     packet.extra_len = val_len(packet.extra)
     packet.total_len = packet.key_len + packet.extra_len + val_len(packet.value)
 
@@ -581,17 +587,17 @@ function packet_meta:read_packet(sock)
     end
 
     local packet = self
-    packet.magic = strbyte(data, 1)
-    packet.opcode = strbyte(data, 2)
-    packet.key_len = get_byte2(data, 3)
+    packet.magic     = strbyte(data, 1)
+    packet.opcode    = strbyte(data, 2)
+    packet.key_len   = get_byte2(data, 3)
 
     packet.extra_len = strbyte(data, 5)
     packet.data_type = strbyte(data, 6)
-    packet.status = get_byte2(data, 7)
+    packet.status    = get_byte2(data, 7)
 
     packet.total_len = get_byte4(data, 9)
-    packet.opaque = get_byte4(data, 13)
-    packet.cas = get_byte8(data, 17)
+    packet.opaque    = get_byte4(data, 13)
+    packet.cas       = get_byte8(data, 17)
 
     local value_len = packet.total_len - packet.extra_len - packet.key_len
     local val_config = { extra = packet.extra_len, key = packet.key_len, value = value_len }
@@ -652,13 +658,18 @@ local function prcess_sock_packet(sock, packet)
     return packet:read_packet(sock)
 end
 
--- local magic_bytes = {
---     req_c2s = 0x80,	-- Request packet from client to server
---     res_s2c = 0x81,	-- Response packet from server to client
---     res_felx= 0x18,	-- Response packet containing flex extras
---     req_s2c = 0x82,	-- Request packet from server to client
---     res_c2s = 0x83	-- Response packet from client to server
--- }
+
+local magic_bytes = {
+    req_c2s = 0x80,	-- Request packet from client to server
+    res_s2c = 0x81,	-- Response packet from server to client
+    res_felx= 0x18,	-- Response packet containing flex extras
+    req_s2c = 0x82,	-- Request packet from server to client
+    res_c2s = 0x83	-- Response packet from client to server
+}
+
+
+_M._unused_f0 = magic_bytes
+
 
 local opcodes = {
     Hello = 0x1f,
@@ -947,14 +958,18 @@ local status_code = {
     [0x00d7] = "(Subdoc) A deleted document can't have a value",
 }
 
--- local data_types = {
---     ["JSON"] = 0x01,
---     ["Snappy compressed"] = 0x02,
---     ["Extended attributes (XATTR)"] = 0x04
--- }
+
+_M._unused_f2 = status_code
 
 
-_M._unued_f2 = status_code
+local data_types = {
+    ["JSON"] = 0x01,
+    ["Snappy compressed"] = 0x02,
+    ["Extended attributes (XATTR)"] = 0x04
+}
+
+
+_M._unused_f3 = data_types
 
 
 local function sasl_list(sock)
@@ -1006,7 +1021,7 @@ local function sasl_auth(sock, client, auth_method)
 end
 
 
-local function xor_bytestr( a, b )
+local function xor_bytestr(a, b )
     local res = ""
 
     for i=1,#a do
