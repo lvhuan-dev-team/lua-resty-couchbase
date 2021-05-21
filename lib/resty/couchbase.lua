@@ -1336,7 +1336,7 @@ local function n1ql_config(client)
 
     local value, err = process_packet(client, req_packet)
     if not value then
-        return nil, "failed to get cluster config.: " .. err
+        return nil, "failed to get cluster config.: " .. err or ""
     end
 
     local config = cjson.decode(value)
@@ -1421,7 +1421,7 @@ function _M:create_client(host_ports, bucket_name, username, password, cluster)
 end
 
 
-function _M:read(opcode, key)
+function _M:_get(opcode, key)
     local req_packet = packet_meta:create_request({
         opcode = opcode,
         key = key,
@@ -1437,19 +1437,19 @@ function _M:read(opcode, key)
 end
 
 function _M:get(key)
-    return self:read(opcodes.Get, key)
+    return self:_get(opcodes.Get, key)
 end
 
 function _M:getq(key)
-    return self:read(opcodes.GetQ, key)
+    return self:_get(opcodes.GetQ, key)
 end
 
 function _M:getk(key)
-    return self:read(opcodes.GetK, key)
+    return self:_get(opcodes.GetK, key)
 end
 
 function _M:getkq(key)
-    return self:read(opcodes.GetKQ, key)
+    return self:_get(opcodes.GetKQ, key)
 end
 
 
@@ -1484,7 +1484,7 @@ function _M:hello()
     return ori_value
 end
 
-function _M:write(opcode, key, value, expir, data_type)
+function _M:_set(opcode, key, value, expir, data_type)
     if type(value) == "table" then
         value = cjson.encode(value)
     end
@@ -1506,43 +1506,51 @@ function _M:write(opcode, key, value, expir, data_type)
 end
 
 function _M:set(key, value, expir, data_type)
-    return self:write(opcodes.Set, key, value, expir, data_type)
+    return self:_set(opcodes.Set, key, value, expir, data_type)
 end
 
 function _M:setq(key, value, expir, data_type)
-    return self:write(opcodes.SetQ, key, value, expir, data_type)
+    return self:_set(opcodes.SetQ, key, value, expir, data_type)
 end
 
 function _M:add(key, value, expir, data_type)
-    return self:write(opcodes.Add, key, value, expir, data_type)
+    return self:_set(opcodes.Add, key, value, expir, data_type)
 end
 
 function _M:addq(key, value, expir, data_type)
-    return self:write(opcodes.AddQ, key, value, expir, data_type)
+    return self:_set(opcodes.AddQ, key, value, expir, data_type)
 end
 
 function _M:replace(key, value, expir, data_type)
-    return self:write(opcodes.Replace, key, value, expir, data_type)
+    return self:_set(opcodes.Replace, key, value, expir, data_type)
 end
 
 function _M:replaceq(key, value, expir, data_type)
-    return self:write(opcodes.ReplaceQ, key, value, expir, data_type)
+    return self:_set(opcodes.ReplaceQ, key, value, expir, data_type)
 end
 
-function _M:delete(key)
+function _M:_delete(opcode, key)
     local req_packet = packet_meta:create_request({
-        opcode = opcodes.Delete,
+        opcode = opcode,
         key = key,
     })
 
     local value, err = process_packet(self, req_packet)
     if not value then
-        return nil, "failed to delete key: " .. tostring(err)
+        return nil, "failed to delete ".. opcode .." key: " .. tostring(err)
     end
 
     return value
 end
 
+function _M:delete(key)
+    return self:_delete(opcodes.Delete, key)
+end
+
+
+function _M:deleteq(key)
+    return self:_delete(opcodes.DeleteQ, key)
+end
 
 function _M:get_bluk(...)
     local resp_values = {}
