@@ -224,12 +224,12 @@ local function fetch_configs(servers, bucket_name, username, password)
                 configs[#configs + 1] = config
                 break
             else
-                log_error(strfmt(
+                log_debug(strfmt(
                     'fetch config is error,from host=%s, port=%s, username=%s, token=%s, server response body=%s',
                         server.host, server.port, username, token, body))
             end
         else
-            log_error(strfmt('fetch config is error,from host=%s, port=%s, username=%s, token=%s, err=%s',
+            log_debug(strfmt('fetch config is error,from host=%s, port=%s, username=%s, token=%s, err=%s',
                     server.host, server.port, username, token, err))
         end
     end
@@ -307,7 +307,7 @@ local function reload_vbucket(old_vbucket)
     -- reload time 15 seconds.
     if ngx_now() - last_reload > 15 then
         last_reload = ngx_now()
-        log_error('try to refresh couchbase conifg.')
+        log_debug('try to refresh couchbase conifg.')
         local new_vbucket = create_vbucket(old_vbucket.host_ports, old_vbucket.name,
                                            old_vbucket.username, old_vbucket.password)
 
@@ -1308,13 +1308,13 @@ local function process_packet(client, packet)
     local packets, err = process_multi_packets(client, { packet })
 
     if not (packets and packets[1]) then
-        log_error("try process_multi_packets failure. error: ", err, " packets: ", cjson.encode(packets))
+        log_debug("try process_multi_packets failure. error: ", err, " packets: ", cjson.encode(packets))
         return nil, err
     end
 
     local resp = packets[1]
     if resp.status ~= 0x0 then
-        log_error("respone status error, ", err, ", data: ", cjson.encode(resp))
+        log_debug("respone status error, ", err, ", data: ", cjson.encode(resp))
         return nil, resp.value
     end
 
